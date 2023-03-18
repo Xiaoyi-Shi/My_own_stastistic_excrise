@@ -1,0 +1,11 @@
+{
+  "args": {}, 
+  "headers": {
+    "Accept": "*/*", 
+    "Host": "httpbin.org", 
+    "User-Agent": "RStudio Desktop (2022.12.0.353); R (4.2.3 x86_64-w64-mingw32 x86_64 mingw32)", 
+    "X-Amzn-Trace-Id": "Root=1-64147611-6f8347141021a6453da7b840"
+  }, 
+  "origin": "117.24.39.38", 
+  "url": "https://httpbin.org/get"
+}

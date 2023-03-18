@@ -1,0 +1,1324 @@
+---
+title: "test way"
+author: "XiaoYi"
+date: "2021/3/4"
+#documentclass: ctexart #支持中文的pdf输出
+output:
+  #rticles::ctex:       #pdf输出器
+    #toc: yes
+  html_document:
+    toc: yes
+    toc_float: yes
+    toc_depth: 4
+    number_sections: T
+    code_folding: show
+    css: css/mo.css
+editor_options: 
+  chunk_output_type: inline
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = F, eval = T, prompt = TRUE, tidy = F, results = "hold")
+```
+
+# 建立动态链接文档
+用 `servr::rmdv2("dir")` 时，目录中文件名不能有空格
+
+------------------------
+
+```{r library, eval=T, echo=T, message=FALSE, include=F, results="hide"}
+library("tidyverse")
+library("gt")
+library("printr")
+library("readxl")
+library("vcd")
+make_css <- function(x, my_list = 0) {
+  if (x == "sjPlot") {
+    if (my_list[[1]] == 0) {
+      y <- list(
+        css.table = "width:100%;",
+        css.centeralign = "text-align: center;",
+        css.firsttablecol = "text-align:center;"
+      )
+    } else {
+      y <- list(
+        css.table = "width:100%;",
+        css.centeralign = "text-align: center;",
+        css.firsttablecol = "text-align:center;"
+      )
+      y <- c(y, my_list)
+    }
+  } else {
+    y <- paste(
+      "#", x, " .gt_table {
+          width : 100%;
+          }",
+      "#", x, " .gt_row {
+          text-align: center;
+          }",
+      "#", x, " .gt_col_heading {
+          width: 5%;
+          text-align: center;
+          vertical-align: middle;
+          }",
+      sep = ""
+    )
+  }
+  return(y)
+}
+judge_pvalue <- function(p, alpha) {
+  if (p < alpha) {
+    return(paste("P <", alpha))
+  } else {
+    return(paste("P =", p))
+  }
+}
+onewayresult_RXC <- function(dff, groups_num) {
+  col_num <- groups_num + 1 # 列数 = 组数列+编号列
+  dff[col_num + 1] <- rowSums(dff[, 2:col_num]) # 新建列行求和
+  #
+  up <- 0
+  down <- 0
+  for (i in 1:nrow(dff)) {
+    if (i == 1) {
+      up <- 1
+      down <- dff[1, col_num + 1]
+      dff[1, col_num + 2] <- (up + down) / 2
+    } else {
+      up <- down + 1
+      down <- down + dff[i, col_num + 1]
+      dff[i, col_num + 2] <- (up + down) / 2
+    }
+  } # 求平均秩次
+  #
+  n <- 0
+  R_i <- 0
+  R_ibar <- 0
+  for (i in 1:groups_num) {
+    for (j in 1:nrow(dff)) {
+      dff[j, col_num + 2 + i] <- dff[j, 1 + i] * dff[j, col_num + 2]
+    }
+    n[i] <- sum(dff[1 + i])
+    R_i[i] <- sum(dff[col_num + 2 + i])
+    R_ibar[i] <- R_i[i] / n[i]
+  }
+  n_total <- sum(n)
+  # 求秩和
+
+  if (groups_num == 2) {
+    t <- 0
+    u_value <- 0
+    p <- 0
+    for (i in 1:nrow(dff)) {
+      t <- t + dff[i, col_num + 1]^3 - dff[i, col_num + 1]
+    }
+    t <- as.double(t)
+
+    u_value <- (min(R_i) - ((n[which(min(n) == n)] * (n_total + 1)) / 2)) / sqrt(n[1] * n[2] * (n_total + 1) * (1 - t / (n_total^3 - n_total)) / 12)
+    u_value <- as.double(u_value)
+
+    p <- pt(u_value, df = Inf)
+    result <- list("u_value" = u_value, "p_value" = p)
+    return(result)
+  } else {
+    H <- 0
+    H_1 <- as.double(0)
+    c <- 0
+    p <- 0
+    Df <- groups_num - 1
+    for (i in 1:nrow(dff)) {
+      c <- c + (dff[i, col_num + 1]^3 - dff[i, col_num + 1])
+    }
+    c <- 1 - (c / (n_total^3 - n_total))
+    c <- as.double(c)
+
+    for (i in 1:length(R_i)) {
+      H_1 <- H_1 + (R_i[i]^2) / n[i]
+    }
+    H_1 <- as.double(H_1)
+
+    H <- 12 / (n_total * (n_total + 1)) * H_1 - (3 * (n_total + 1))
+
+    H <- as.double(H)
+    Hc <- H / c
+    Hc <- as.double(Hc)
+    p_value <- pchisq(Hc, Df, lower.tail = F)
+    result <- list("H_value" = H, "C_value" = c, "Hc_value" = Hc, "df" = Df, "p_value" = p_value)
+    return(result)
+  }
+} # df 的格式 第一列等级资料1：n, 第2列开始为各组计数，如P129最下面表格前三行， groups_num为分组数。
+geteqranks <- function(df_2) { # 第一列为分组，第二列数据，第三列默认低到高排序
+  df_2[1] <- as.double(df_2[[1]])
+  df_2[2] <- as.double(df_2[[2]])
+  df_2[3] <- as.double(df_2[[3]])
+  for (i in 1:(nrow(df_2) - 1)) {
+    some_n <- 1
+    s_um <- 0
+    q_ue <- 0
+    for (j in (i + 1):nrow(df_2)) {
+      if (abs(df_2[i, 2]) == df_2[j, 2]) {
+        some_n <- some_n + 1
+      }
+    }
+    if (some_n > 1) {
+      s_um <- sum(df_2[i:(i + some_n - 1), 3])
+      q_ue <- s_um / some_n
+      df_2[i:(i + some_n - 1), 3] <- q_ue
+    }
+  }
+  return(df_2)
+}
+creatNarow <- function(df, nrows) {
+  if (nrow(df) < nrows) {
+    for (i in nrow(df):(nrows - 1)) {
+      df[i + 1, ] <- NA
+    }
+    return(df)
+  } else {
+    stop("nrows <= df's nrow")
+  }
+} # 增添NA行数至nrows行
+Three_line_tbl <- function(gt_tbl){
+threelinetbl <- gt_tbl %>% tab_options(
+    #container.width = px(100),
+    #container.padding.x = px(200),
+    #container.overflow.y = T,
+    
+    #table.width = px(6000),
+    #table.align = "right",
+    
+    #column_labels.background.color = "red"
+    
+    table.border.top.color = "white",
+    #table.border.top.width = px(3),
+    #table.border.bottom.color = "black",
+    
+    heading.border.bottom.style = "double",
+    heading.border.bottom.color = "black",
+    heading.border.bottom.width = px(3),
+    #heading.border.lr.color = "red"
+    
+    #column_labels.border.top.color = "black",
+    column_labels.border.bottom.color = "black",
+    column_labels.border.bottom.width = px(2),
+    #column_labels.vlines.color = "red",
+    #column_labels.vlines.width = px(1)
+    
+    table_body.border.bottom.color = "black",
+    table_body.border.bottom.width = px(3),
+    table_body.hlines.color = "white"
+  )
+return(threelinetbl)
+}
+```
+
+
+# 计量资料的统计描述
+对象`E02_01`:<br> 
+```{r E02-01, eval=TRUE}
+E02_01 <- read_xls("../医学统计学第五版/02章/09 R数据文件/E02_01.xls")
+E02_01[[1]]
+```
+
+-----
+
+## 频数描述
+<br> 
+
+函数     | 描述
+-------- | -----------------------
+`length()` | 显示对象中元素的数量
+`max()` |  计算最大值
+`min()` | 计算最小值
+`mean()` | 计算平均值
+`median()` | 计算中位数
+`sd()` | 计算标准差
+`var()` | 计算方差
+`sd()/sqrt()` | 计算标准误
+`range()` | 计算值域
+`quantile(,)` | 求分位数
+
+### Codes:
+
+```{r func-base}
+length(E02_01$x) # 显示对象中元素的数量
+max(E02_01$x) # 计算最大值
+min(E02_01$x) # 计算最小值
+mean(E02_01$x) # 计算平均值
+median(E02_01$x) # 计算中位数
+sd(E02_01$x) # 计算标准差
+var(E02_01$x) # 计算方差
+sd(E02_01$x) / sqrt(length(E02_01$x)) # 计算标准误
+range(E02_01$x) # 计算值域
+quantile(E02_01$x, c(0.025, 0.25, 0.5, 0.75, 0.975)) # 求分位数， 2.5%, 25%, 50%, 75%, 97.5 %的分位点
+```
+
+-----
+
+## 频数分布图
+<br>
+
+函数 | 描述
+---- | ------
+`qqnorm()` | Q-Q图
+`hist()` | 直方图
+`boxplot()` | 箱式图
+`plot()` | 散点图
+`stem()` | 茎叶图
+`ggplot()+`<br> &emsp;`geom_line(, stat = "density")` | 概率密度曲线
+
+### Codes:
+```{r func-plot}
+qqnorm(E02_01$x) # 画出E02_01的Q-Q图
+hist(E02_01$x) # 直方图
+boxplot(E02_01$x) # 箱式图
+plot(E02_01$x) # 散点图
+stem(E02_01$x) # 将数据序列x从x轴到数据值按照茎状形式画出，以圆圈终止。杆图
+
+X <- pretty(c(2.5, 6), 300) # pretty()函数用于创建美观的分割点
+# dnorm()函数返回正态分布概率密度函数，求出X点的概率值
+TranData <- dnorm(X, mean = mean(E02_01$x), sd = sd(E02_01$x))
+# X与X点的概率值之间的散点图
+plot(X, TranData)
+
+ggplot(E02_01) + # ggplot2做图
+  geom_line(aes(x), stat = "density")
+```
+
+-----
+
+## 清洗数据
+<br>
+
+函数 | 描述
+---- | --------
+`summary()` | 查看统计
+`str()` | 查看数据结构
+`head()` | 查看开头几行数据（n=行数）
+`tail()` | 查看结尾几行数据（n=行数）
+`dplyr::slice()` | 查看指定行数（4:9）
+`dplyr::select()` | 选择指定列
+`dplyr::filter()` | 筛选行
+`dplyr::arrange()` | 排序
+`dplyr::group_by()` | 分组
+`dplyr::summarise()` | 汇总
+
+### Code:
+```{r func-cleaning}
+summary(E02_01)
+str(E02_01)
+head(E02_01[[1]])
+tail(E02_01[[1]])
+E02_01 %>% slice(2:5)
+```
+
+<br>接下来我们用内置的`mtcars`集来演示：
+```{r func-cleaning2, results='markup'}
+head(mtcars) # 只取前几行
+mtcars %>%
+  select(mpg, cyl) %>%
+  head()
+mtcars %>%
+  filter(cyl == 4) %>%
+  arrange(-mpg) # 筛选 cyl为4的行并按mpg从大到小排序
+mtcars %>% summarise(mean_mpg = mean(mpg)) # 不分组统计
+mtcars %>%
+  group_by(cyl) %>%
+  summarise(mean_mpg = mean(mpg)) # 分组统计
+```
+-----
+
+# 计量资料常用检验<br>
+## T检验<br>
+* 适用范围：
+  + 样本含量**较少**
+  + 均值参数比较
+* T检验需要满足条件：
+  + 总体为正态分布
+  + 两样本对应的总体的方差相等 即 $\sigma_1^2 = \sigma_2^2$
+  
+### 单样本T检验
+<br>用例子 _3-5_ 中数据估计样本和总体的均值是否有区别，其中已知总体均值 $\mu_0 = 140$
+<br>codes:
+```{r t-test1}
+df <- read_xls("../医学统计学第五版/03章/09 R数据文件/E03_05.xls")
+df$hb
+t.test(df$hb, mu = 140) # 已知总体均值 mu = 140
+```
+### 配对样本T检验
+<br>用例子 _3-6_ 中数据比较两种实验方法是否有区别
+<br>codes:
+```{r t-test2}
+df <- read_xls("../医学统计学第五版/03章/09 R数据文件/E03_06.xls")
+df
+t.test(df$x1, df$x2, paired = T) # 若是长表格则可以用 ~ 匹配关系
+```
+### 两独立样本T检验
+#### 方差相等
+<br>用例子 _3-7_ 中数据比较两种实验方法是否有区别
+<br>codes: 正态分布检验-F检验-t检验
+```{r t-test3}
+library("patchwork")
+df <- read_xls("../医学统计学第五版/03章/09 R数据文件/E03_07.xls")
+p1 <- ggplot() +
+  geom_qq(aes(sample = x), data = filter(df, Group == 1)) +
+  theme_classic()
+p2 <- ggplot() +
+  geom_qq(aes(sample = x), data = filter(df, Group == 2)) +
+  theme_classic()
+p1 + p2 # 画出2组数据的QQ图
+shapiro.test(filter(df, Group == 1)[[2]]) # 组1正态性检验
+shapiro.test(filter(df, Group == 2)[[2]]) # 组2正态性检验
+var.test(data = df, x ~ Group) # 方差齐性检验；等价 var.test(filter(df, Group == 1)[[2]], filter(df, Group == 2)[[2]])
+t.test(data = df, x ~ Group) # 两独立样本T检验
+```
+
+<br>
+
+#### 方差不等
+<br>用近似t检验
+<br>用例子 _3-8_ 中数据比较血清总胆固醇（TC）含量是否有区别
+<br>codes: 正态分布检验-F检验-t检验
+```{r t-test4}
+library("patchwork")
+df <- read_xls("../医学统计学第五版/03章/09 R数据文件/E03_08.xls")
+p1 <- ggplot() +
+  geom_qq(aes(sample = x), data = filter(df, grp == 1)) +
+  theme_classic()
+p2 <- ggplot() +
+  geom_qq(aes(sample = x), data = filter(df, grp == 2)) +
+  theme_classic()
+p1 + p2 # 画出2组数据的QQ图
+shapiro.test(filter(df, grp == 1)[[2]]) # 组1正态性检验
+shapiro.test(filter(df, grp == 2)[[2]]) # 组2正态性检验
+var.test(data = df, x ~ grp) # 方差齐性检验；等价 var.test(filter(df, Group == 1)[[2]], filter(df, Group == 2)[[2]])
+t.test(data = df, x ~ grp, var.equal = F) # 两独立样本校正T检验
+```
+
+# 方差分析
+## 完全随机设计方差分析
+采用*完全随机*分组方法进行分组，每组分别接受不同的处理因素。试验后比较**均值**直接差别有无统计学意义。
+
+* 适用范围：
+  + 多组均值比较
+* 需要满足条件：（若不满足可以变量转换或者使用非参数检验中的**Kruskal-Wills H检验**）
+  + 独立性
+  + 正态性
+  + 方差齐性 即 $\sigma_1^2 = \sigma_2^2$
+
+<br>用例子 _4-2_ 中数据比较3种降脂药物的临床疗效
+<br>codes:
+```{r ANOVA-1, results='markup', message=FALSE}
+df <- read_xls("../医学统计学第五版/04章/09 R数据文件/E04_02.xls")
+df %>% pivot_wider(names_from = Group, values_from = TG)
+p1 <- ggplot() +
+  geom_qq(aes(sample = TG), data = filter(df, Group == 1)) +
+  theme_classic()
+p2 <- ggplot() +
+  geom_qq(aes(sample = TG), data = filter(df, Group == 2)) +
+  theme_classic()
+p3 <- ggplot() +
+  geom_qq(aes(sample = TG), data = filter(df, Group == 3)) +
+  theme_classic()
+p1 + p2 + p3 # 画出三组数据的QQ图
+plot(df)
+shapiro.test(filter(df, Group == 1)[[2]]) # 第一组正态性检验
+shapiro.test(filter(df, Group == 2)[[2]]) # 第二组正态性检验
+shapiro.test(filter(df, Group == 3)[[2]]) # 第三组正态性检验
+df$Group <- as.factor(df$Group)
+car::leveneTest(data = df, TG ~ Group) # 方差齐性检验
+fit <- aov(data = df, TG ~ Group)
+summary(fit) # 单因素方差分析
+TukeyHSD(fit)$Group # 两两间TukeyHSD检验
+plot(TukeyHSD(fit)) # TukeyHSD检验图
+```
+
+## 随机区组设计方差分析
+采用*配伍设计*分组思想进行分组，先分区组，每个区组内各个个体再分配到处理因素不同水平组。试验后比较**均值**直接差别有无统计学意义。相对于完全随机方差分析减少了组内误差，增加了效能。
+
+* 适用范围：
+  + 多组均值比较
+* 需要满足条件：（若不满足可以变量转换或者使用非参数检验中的**Friedman M检验**）
+  + 独立性
+  + 正态性
+  + 方差齐性 即 $\sigma_1^2 = \sigma_2^2$
+
+<br>用例子 _4-4_ 中数据比较不同区组中三名孕妇接受三种不同孕期营养补充剂对新生儿体重的影响
+<br>codes:
+```{r ANOVA-2, results='markup'}
+df <- read_xls("../医学统计学第五版/04章/09 R数据文件/E04_04.xls")
+df %>%
+  pivot_wider(names_from = Group, values_from = W) %>%
+  gt(id = "ANOVA-2_1") %>%
+  tab_spanner(label = "Group", columns = 2:11) %>%
+  opt_css(css = make_css("ANOVA-2_1"))
+p1 <- ggplot() +
+  geom_qq(aes(sample = W), data = filter(df, Treat == 1)) +
+  theme_classic()
+p2 <- ggplot() +
+  geom_qq(aes(sample = W), data = filter(df, Treat == 2)) +
+  theme_classic()
+p3 <- ggplot() +
+  geom_qq(aes(sample = W), data = filter(df, Treat == 3)) +
+  theme_classic()
+p1 + p2 + p3 # 画出三组数据的QQ图
+shapiro.test(filter(df, Treat == 1)[[3]]) # 第一组正态性检验
+shapiro.test(filter(df, Treat == 2)[[3]]) # 第二组正态性检验
+shapiro.test(filter(df, Treat == 3)[[3]]) # 第三组正态性检验
+df$Treat <- as.factor(df$Treat)
+df$Group <- as.factor(df$Group)
+car::leveneTest(data = df, W ~ Treat) # 方差齐性检验
+fit <- aov(data = df, W ~ Treat + Group)
+summary(fit) # 双因素方差分析（另一因素为区组）
+TukeyHSD(fit)$Treat # 多重比较
+plot(TukeyHSD(fit))
+HH::interaction2wt(data = df, W ~ Treat * Group) # 交互作用检验
+```
+
+## 拉丁设计方差分析
+采用*区组设计*分组思想进行分组，对*一种处理因素*和*两种区组因素*进行分析。根据处理因素水平数g创建$g \times g$的表格，再分行、列区组。表格选好后读取$2 \times g$个随机数取秩依次交换行和列，随后按照表格进行试验。
+
+* 适用范围：
+  + 多区组单因素均值比较
+* 需要满足条件：（若不满足可以变量转换或者使用非参数检验中的**Friedman M检验**）
+  + 独立性
+  + 正态性
+  + 方差齐性 即 $\sigma_1^2 = \sigma_2^2$
+
+<br>用例子 _4-5_ 中数据研究6种**药物**$^1$对给**家兔**$^2$**不同部位**$^3$（1是处理因素，2位行区组，3位列区组）注射后产生的皮肤疱疹大小
+<br>codes:
+```{r ANOVA-3, results='markup'}
+df <- read_xls("../医学统计学第五版/04章/09 R数据文件/E04_05.xls")
+r_place <- function(x) {
+  for (i in 1:nrow(x[3])) {
+    if (x[[3]][i] == 1) {
+      x[[3]][i] <- "A"
+    } else if (x[[3]][i] == 2) {
+      x[[3]][i] <- "B"
+    } else if (x[[3]][i] == 3) {
+      x[[3]][i] <- "C"
+    } else if (x[[3]][i] == 4) {
+      x[[3]][i] <- "D"
+    } else if (x[[3]][i] == 5) {
+      x[[3]][i] <- "E"
+    } else if (x[[3]][i] == 6) x[[3]][i] <- "F"
+  }
+  return(x)
+}
+df[1:3] %>%
+  r_place(.) %>%
+  pivot_wider(names_from = ID, values_from = Treat) %>%
+  gt(id = "ANOVA-3_1") %>%
+  tab_spanner(label = "ID", columns = 2:7) %>%
+  opt_css(css = make_css("ANOVA-3_1")) # 随机化后的拉丁表格
+df[c(1:2, 4)] %>%
+  pivot_wider(names_from = ID, values_from = Results) %>%
+  gt(id = "ANOVA-3_2") %>%
+  tab_spanner(label = "ID", columns = 2:7) %>%
+  opt_css(css = make_css("ANOVA-3_2")) # 将实验结果填入拉丁表格（ABCDEF分别对应各处理因素水平）
+df$Treat <- as.factor(df$Treat)
+df$Group <- as.factor(df$Group)
+df$ID <- as.factor(df$ID)
+summary(aov(data = df, Results ~ Treat + Group + ID)) # 拉丁方差分析
+```
+## 两阶段交叉设计
+将A、B两种处理*先后*施加于同一批试验对象，随机50%先接受A处理再接受B处理，另一半相反。
+
+* 适用范围
+  + 止痛、镇静、降压等药物或治疗方法间的比较
+  
+* T检验需要满足条件：（若不满足可以变量转换或者使用非参数检验中的**Friedman M检验**）
+  + 前一个试验阶段的效应不能持续到下一阶段（需要**洗脱**阶段）
+
+<br>用例子 _4-6_ 中数据比较A、B两种闪烁液结果是否有统计学意义
+<br>codes:
+```{r Cross-over design, results='markup'}
+df <- read_xls("../医学统计学第五版/04章/09 R数据文件/E04_06.xls")
+r_place <- function(x) {
+  for (i in 1:nrow(x[2])) {
+    if (x[[2]][i] == 1) {
+      x[[2]][i] <- "A"
+    } else if (x[[2]][i] == 2) x[[2]][i] <- "B"
+  }
+  return(x)
+}
+df[1:3] %>%
+  r_place(.) %>%
+  pivot_wider(names_from = phase, values_from = treat) %>%
+  gt(id = "Cross-over_design_1") %>%
+  tab_spanner(label = "step", columns = 2:3) %>%
+  opt_css(css = make_css("Cross-over_design_1"))
+df[c(1, 3, 4)] %>%
+  r_place(.) %>%
+  pivot_wider(names_from = phase, values_from = y) %>%
+  gt(id = "Cross-over_design_2") %>%
+  tab_spanner(label = "step", columns = 2:3) %>%
+  opt_css(css = make_css("Cross-over_design_2"))
+df$treat <- as.factor(df$treat)
+df$phase <- as.factor(df$phase)
+df$person <- as.factor(df$person)
+summary(aov(data = df, y ~ treat + phase + person))
+```
+
+# 计数资料的描述统计
+## 常用相对数
+
+# 几种离散型变量的分布及其应用
+## 二项分布
+
+二项分布公式：$$P(X)=\frac{n!}{X!(n-X)!}\pi^X(1-\pi)^{n-X}$$
+其中两个参数：$\pi$ 和 $n$<br>
+*例6-1*：某医学技能通过率为0.8, 现在有10名学生参加， 分别计算其中有6、7、8人通过的概率。<br>
+ `dbinom(6,10,0.8)` = `r dbinom(6,10,0.8)`<br>
+ `dbinom(7,10,0.8)` = `r dbinom(7,10,0.8)`<br>
+ `dbinom(8,10,0.8)` = `r dbinom(8,10,0.8)`<br>
+
+* 适用条件
+  + 两种结果对立且加起来为1
+  + 阳性概率$\pi$不变
+  + 重复试验是独立的
+  
+* 性质
+  + 均数：$\mu=n\pi$
+  + 方差：$\sigma^2=n\pi(1-\pi)$
+  
+二项分布的图像只有$\pi=0.5$时为*正态分布*，当$n→\infty$时图形近似正态分布。<br>
+<br>
+*例6-2*：对13名患者进行试验阳性有6例，当α取0.05水平下求阳性率(p)的95%置信区间。<br>
+codes:
+```{r binom-ava}
+binom.test(6, 13, 0.05) # 总体率区间估计
+```
+
+<br>
+*例6-4*：手术方法一的成功率为0.55，现对10名患者行手术方法二，有9人成功，比较方法二成功率是否高于方法一。<br>
+codes:
+```{r binom-n1va}
+binom.test(9, 10, 0.55) # 样本和总体率比较
+```
+<br>
+*例6-5*：某校100米达标率为0.7，现在另一个学校随机抽10人有9人达标，这两个学校达标率是否相同。<br>
+codes:
+```{r binom-n2va}
+binom.test(9, 10, 0.7) # 样本和总体率比较
+```
+
+## Poisson分布
+
+作为*二项分布*的一种极限情况，是描述*小概率*事件的重要分布。
+公式：$$P(X)=\frac{e^{-\lambda}\lambda^X}{X!} \quad X=0,1,2,···$$
+
+* 适应条件（可以把“观测单位”=“时间”）
+  + 普通性：在充分小的观测单位上X的取值最多为1
+  + 独立增量性：某个观测单位上X的取值与前面各单位上X的取值无关
+  + 平稳性：X的取值只与观测单位的大小有关，与观测单位的位置无关
+  + *例： 无传染性，无永久免疫，无遗传的发病概率很低的疾病；地震；罕见事件*
+
+* 性质
+  + 当n很大，π很小，且nπ=$\lambda$为常数的时候二项分布近似poisson分布
+  + 总体均数$\lambda$和总体方差$\sigma^2$是poisson的重要特征
+  + $\lambda$增大时poisson分布近似正态分布
+  + $\lambda$决定了poisson分布的图形形状
+  
+<br>
+*例6-10*：1L空气中测得粉尘颗粒为21，假设空间均匀分布粉尘，估计平均每升空气含粉尘的95%置信区间。<br>
+codes:
+```{r poisson-ava}
+poisson.test(21, 1, 0.05) # 总体均数区间估计
+```
+*例6-12*：先天性心脏病发病率为0.8%，调查120人发现4例，作统计推断。<br>
+codes:
+```{r poisson-nva}
+1 - ppois(4 - 1, 120 * 0.008) # 样本与总体比较；λ＜20 直接法 ；(q = 4-1)是因为假设的是 P(X≥4)即[1-P(X<3)]的情况，
+```
+*例6-13*：神经发育不全的概率为0.3%，调查近亲结合25000人阳性123人，问是否近亲结合发病率高。<br>
+codes:
+```{r poisson-n2va}
+Poisson_nor <- function(X, n, pi) {
+  lamda <- n * pi
+  u <- (X - lamda) / sqrt(lamda)
+  if (u < 0) {
+    p_value <- pt(u, df = Inf)
+  } # u值表
+  else if (u > 0) p_value <- pt(-u, df = Inf)
+  print(paste("u=", u, "p-value=", p_value))
+  return(p_value)
+} ## 样本与总体比较；λ>20 近似正态法
+Poisson_nor(123, 25000, 0.003)
+```
+*例6-14*：对2种纯净水各抽样1ml，分别培养出4个和7个细菌，问两种纯净水是否有区别。<br>
+*例6-15*：对甲地观察4年阳性32例，乙地3年12例，问是否有统计学差异。<br>
+codes:
+```{r poisson-nvn}
+Poisson_nvn <- function(n1, X1, n2, X2) {
+  if (n1 == n2) {
+    if (X1 + X2 >= 20) {
+      u <- (X1 - X2) / sqrt(X1 + X2)
+    } else {
+      u <- (abs(X1 - X2) - 1) / sqrt(X1 + X2)
+    }
+  } else if (X1 + X2 >= 20) {
+    u <- (X1 / n1 - X2 / n2) / sqrt(X1 / n1^2 + X2 / n2^2)
+  } else {
+    u <- (abs(X1 / n1 - X2 / n2) - 1) / sqrt(X1 / n1^2 + X2 / n2^2)
+  }
+  if (u < 0) {
+    p_value <- pt(u, df = Inf)
+  } else if (u > 0) p_value <- pt(-u, df = Inf) # u值表
+  print(paste("u=", u, "p-value=", p_value))
+  return(c(u, p_value))
+} # 书P99
+Poisson_nvn(1, 4, 1, 7)
+Poisson_nvn(4, 32, 3, 12)
+```
+## 负二项分布
+
+一种离散型分布，用于描述生物的群聚性如*钉螺在土壤中的分布；昆虫的空间分布*
+
+[B站视频](https://www.bilibili.com/video/BV1hy4y117eo?from=search&seid=18191198045643155785)
+
+# 卡方检验
+
+* 适用范围
+  + 用于推断分类变量中两（多）个总体*率*之间有无差别
+  + 多个样本率之间的多重比较
+  + 两个分类变量之间的关联性和拟合优度
+
+## 四格表资料的卡方检验
+
+只有（a、b、c、d）4个数据，通过比较理论频数和实际频数的比算出卡方值，再通过自由度计算P值<br>
+*例7-1*：比较实验组和对照组总体达标率有无差别。<br>
+codes:
+```{r chi-square-4type, results='hold'}
+df <- read_xls("../医学统计学第五版/07章/09 R数据文件/E07_01.xls")
+Table <- table(df$group, df$x) # 生成四格表
+TTable <- as_tibble(Table, .name_repair = "unique") %>% pivot_wider(names_from = ...2, values_from = n) # 转换为tibble对象好制作表格
+TTable[[1]] <- c("对照组", "实验组")
+colnames(TTable) <- c("组别", "达标", "未达标")
+TTable %>%
+  gt(id = "chi-square-4type-1") %>%
+  opt_css(css = make_css("chi-square-4type-1"))
+my2x2_chisq.test <- function(x) {
+  tot <- x[1] + x[2] + x[3] + x[4]
+  t1 <- x[1] + x[3]
+  t2 <- x[2] + x[4]
+  t3 <- x[1] + x[2]
+  t4 <- x[3] + x[4]
+  if (tot < 40) {
+    print("sample < 40, use Fisher way")
+    return(fisher.test(x))
+  }
+  Tt <- 0
+  Tt[1] <- t1 * t3 / tot
+  Tt[2] <- t1 * t4 / tot
+  Tt[3] <- t2 * t3 / tot
+  Tt[4] <- t2 * t4 / tot
+  Tm5 <- 0
+  for (i in 1:4) {
+    if (Tt[i] < 1) {
+      print("T value < 1, use Fisher way")
+      return(fisher.test(x))
+    } else if (Tt[i] < 5) Tm5 <- Tm5 + 1
+  }
+  if (Tm5 == 0) {
+    return(chisq.test(x, correct = F))
+  } else {
+    print("there one or more ecpected data < 5 but >1, use both chisq-test(corrected) and Fisher-test")
+    print(fisher.test(x))
+    print(chisq.test(x, correct = T))
+    return(NULL)
+  }
+} # 自定义函数判断是否校正或用Fisher精确概率法
+my2x2_chisq.test(Table) # 卡方检验，不进行校正
+```
+<br>
+*例7-2*：比较两种药物治疗脑血管疾病有无差别。<br>
+codes:
+```{r chi-square-4type-2, results='hold'}
+df <- read_xls("..\\医学统计学第五版\\07章\\09 R数据文件\\E07_02.xls")
+TTable <- df %>% pivot_wider(names_from = effect, values_from = n)
+TTable[[1]] <- c("胞磷胆碱组", "神经节苷脂组")
+colnames(TTable) <- c("组别", "有效", "无效")
+TTable %>%
+  gt(id = "chi-square-4type-2") %>%
+  opt_css(css = make_css("chi-square-4type-2")) # 转换为tibble对象好制作表格
+DFable <- as.data.frame(TTable) # tibble转换为dataframe
+Table <- as.table(as.matrix(DFable[-1])) # dataframe转换为矩阵再生成四格表
+rownames(Table) <- c("胞磷胆碱组", "神经节苷脂组")
+colnames(Table) <- c("有效", "无效")
+my2x2_chisq.test(Table) # 卡方检验，校正
+```
+## 匹配四格表资料的卡方检验
+
+* 适用范围
+  + 两种检验方法比较
+  + 样本量不太大的样本
+<br>
+*例7-3*：比较两种检验方法有无差别，是否一致。<br>
+codes:
+```{r chi-square-paired, results='hold'}
+df <- read_xls("..\\医学统计学第五版\\07章\\09 R数据文件\\E07_03.xls")
+TTable <- df %>% pivot_wider(names_from = b, values_from = n)
+TTable[1] <- c("+", "-")
+colnames(TTable) <- c("免疫荧光法", "+", "-")
+TTable %>%
+  gt(id = "chi-square-paired") %>%
+  tab_spanner(label = "乳胶凝集法", 2:3) %>%
+  opt_css(css = make_css("chi-square-paired")) # gt表格制作
+Table <- as.table(as.matrix(TTable[-1])) # tibble转换为table
+rownames(Table) <- c("+", "-")
+colnames(Table) <- c("+", "-")
+mcnemar.test(Table) # 配对卡方检验（两等级的一致性检验，多等级用kappa检验）
+```
+## 四格表资料的Fisher确切概率法
+
+通过超几何分布确定概率。
+
+* 适用范围
+  + 四格表样本小于40
+  + 有一个格子理论频数小于1
+
+<br>
+*例7-4*：比较两组新生儿HBV感染率是否相同。<br>
+codes:
+```{r Fisher-test, results='hold'}
+df <- read_xls("..\\医学统计学第五版\\07章\\09 R数据文件\\E07_04.xls")
+TTable <- df %>% pivot_wider(names_from = result, values_from = n)
+TTable[1] <- c("预防注射组", "非预防组")
+colnames(TTable) <- c("组别", "阳性", "阴性")
+TTable %>%
+  gt(id = "Fisher-test") %>%
+  opt_css(css = make_css("Fisher-test")) # gt表格制作
+Table <- as.table(as.matrix(TTable[-1])) # tibble转换为table
+rownames(Table) <- c("预防注射组", "非预防组")
+colnames(Table) <- c("阳性", "阴性")
+my2x2_chisq.test(Table)
+```
+
+*例7-5*：比较两种肿瘤P53基因表达阳性率是否相同。<br>
+codes:
+```{r Fisher-test2, results='hold'}
+df <- read_xls("..\\医学统计学第五版\\07章\\09 R数据文件\\E07_05.xls")
+TTable <- df %>% pivot_wider(names_from = result, values_from = n)
+TTable[1] <- c("胆囊腺癌", "胆囊腺瘤")
+colnames(TTable) <- c("病种", "阳性", "阴性")
+TTable %>%
+  gt(id = "Fisher-test2") %>%
+  opt_css(css = make_css("Fisher-test2")) # gt表格制作
+Table <- as.table(as.matrix(TTable[-1])) # tibble转换为table
+rownames(Table) <- c("胆囊腺癌", "胆囊腺瘤")
+colnames(Table) <- c("阳性", "阴性")
+my2x2_chisq.test(Table)
+```
+
+## 行X列表资料的卡方检验
+
+有R行C列的列联表用pearson 卡方检验
+<br>
+*例7-6*：3种疗法的效率比较。<br>
+codes:
+```{r chi-square-RXC1}
+df <- read_xls("..\\医学统计学第五版\\07章\\09 R数据文件\\E07_06.xls")
+TTable <- df %>% pivot_wider(names_from = result, values_from = n)
+TTable[1] <- c("物理疗法", "化学疗法", "外用膏药")
+colnames(TTable) <- c("疗法", "有效", "无效")
+TTable %>%
+  gt(id = "chi-square-RXC1") %>%
+  opt_css(css = make_css("chi-square-RXC1")) # gt表格制作
+Table <- as.table(as.matrix(TTable[-1])) # tibble转换为table
+rownames(Table) <- c("物理疗法", "化学疗法", "外用膏药")
+colnames(Table) <- c("有效", "无效")
+chisq.test(Table)
+```
+<br>
+*例7-7*：2组ACE基因分型比较。<br>
+codes:
+```{r chi-square-RXC2}
+df <- read_xls("..\\医学统计学第五版\\07章\\09 R数据文件\\E07_07.xls")
+TTable <- df %>% pivot_wider(names_from = genotype, values_from = frequency)
+TTable[1] <- c("DN组", "无DN组")
+colnames(TTable) <- c("组别", "DD", "ID", "II")
+TTable %>%
+  gt(id = "chi-square-RXC2") %>%
+  opt_css(css = make_css("chi-square-RXC2")) # gt表格制作
+Table <- as.table(as.matrix(TTable[-1])) # tibble转换为table
+rownames(Table) <- c("DN组", "无DN组")
+colnames(Table) <- c("DD", "ID", "II")
+chisq.test(Table)
+```
+## 双向无序列联表关联性检验
+<br>
+*例7-8*：2种血型系统是否有关联性。<br>
+codes:
+```{r chi-square-RXCcor}
+df <- read_xls("..\\医学统计学第五版\\07章\\09 R数据文件\\E07_08.xls")
+TTable <- df %>% pivot_wider(names_from = "MN blood type", values_from = frequency)
+TTable[1] <- c("O", "A", "B", "AB")
+colnames(TTable) <- c("ABO血型", "M", "N", "MN")
+TTable %>%
+  gt(id = "chi-square-RXCcor") %>%
+  tab_spanner(label = "MN血型", 2:4) %>%
+  opt_css(css = make_css("chi-square-RXCcor")) # gt表格制作
+Table <- as.table(as.matrix(TTable[-1])) # tibble转换为table
+rownames(Table) <- c("O", "A", "B", "AB")
+colnames(Table) <- c("M", "N", "MN")
+vcd::assocstats(Table) # 列联系数
+```
+## 双向有序分组资料的线性趋势检验
+<br>
+*例7-9*：年龄和冠状动脉硬化等级之间的关系。<br>
+codes:
+```{r chi-square-RXCliner}
+df <- read_xls("..\\医学统计学第五版\\07章\\09 R数据文件\\E07_09.xls")
+TTable <- df %>% pivot_wider(names_from = coronary, values_from = frequency)
+
+Table <- as.table(as.matrix(TTable[-1])) # tibble转换为table
+rownames(Table) <- c("20~", "30~", "40~", ">=50")
+colnames(Table) <- c("-", "+", "++", "+++")
+
+dff <- as.data.frame(addmargins(Table, FUN = sum)) # 添加汇总行
+TTable <- dff %>% pivot_wider(names_from = Var2, values_from = Freq)
+TTable[1] <- c("20~", "30~", "40~", ">=50", "合计")
+colnames(TTable) <- c("年龄（X）/岁", "-", "+", "++", "+++", "合计")
+TTable %>%
+  gt(id = "chi-square-RXCliner") %>%
+  tab_spanner(label = "冠状动脉硬化等级", 2:5) %>%
+  opt_css(css = make_css("chi-square-RXCliner")) # gt表格制作
+
+
+(CqResults <- chisq.test(Table)) # 求总变异
+(MHResults <- DescTools::MHChisqTest(Table)) # 求线性回归分量
+paste("X-squared of Deviation from the linear regression component= ", (LinearValue <- CqResults$statistic - MHResults[1:9]$statistic)) # 偏离线性回归分量
+paste("Pvalue =", pchisq(LinearValue, df = CqResults$parameter - MHResults$parameter, lower.tail = F)[[1]]) # 偏离线性回归分量p值
+```
+## 多个样本率之间的多重比较
+
+运用Bonferroni卡方分割法
+<br>
+*例7-10*：用7-6的数据分析3种疗法的效率比较。<br>
+codes:
+```{r chi-square-Bonferroni}
+df <- read_xls("..\\医学统计学第五版\\07章\\09 R数据文件\\E07_06.xls")
+TTable <- df %>% pivot_wider(names_from = result, values_from = n)
+TTable[1] <- c("物理疗法", "化学疗法", "外用膏药")
+colnames(TTable) <- c("疗法", "有效", "无效")
+TTable %>%
+  gt(id = "chi-square-Bonferroni") %>%
+  opt_css(css = make_css("chi-square-Bonferroni")) # gt表格制作
+Table <- as.table(as.matrix(TTable[-1])) # tibble转换为table
+rownames(Table) <- c("物理疗法", "化学疗法", "外用膏药")
+colnames(Table) <- c("有效", "无效")
+chisq.test(Table)
+chisq.test1 <- 0
+chisq.test1[1] <- my2x2_chisq.test(Table[-3, ])[[1]]
+chisq.test1[2] <- my2x2_chisq.test(Table[-2, ])[[1]]
+chisq.test1[3] <- my2x2_chisq.test(Table[-1, ])[[1]]
+(Bonferroni <- rcompanion::pairwiseNominalIndependence(Table, fisher = FALSE, gtest = FALSE, chisq = TRUE, method = "fdr")) # Bonferroni检验各组
+
+
+
+TTable2 <- df %>% pivot_wider(names_from = result, values_from = n)
+TTable2[1] <- c("物理疗法", "化学疗法", "外用膏药")
+colnames(TTable2) <- c("疗法", "有效", "无效")
+TTable2[4] <- 0
+TTable2[5] <- 0
+TTable2[6] <- 0
+TTable2[7] <- 0
+TTable2_g1 <- TTable2[1:2, ]
+TTable2_g1[6] <- "分组1"
+TTable2_g2 <- TTable2[c(1, 3), ]
+TTable2_g2[6] <- "分组2"
+TTable2_g3 <- TTable2[c(2, 3), ]
+TTable2_g3[6] <- "分组3"
+TTable2 <- bind_rows(TTable2_g1, TTable2_g2, TTable2_g3)
+TTable2[4] <- TTable2[[2]] + TTable2[[3]]
+TTable2[5][1:2, ] <- chisq.test1[1]
+TTable2[5][3:4, ] <- chisq.test1[2]
+TTable2[5][5:6, ] <- chisq.test1[3]
+TTable2[7][1:2, ] <- round(Bonferroni$p.Chisq[1], 5)
+TTable2[7][3:4, ] <- round(Bonferroni$p.Chisq[2], 5)
+TTable2[7][5:6, ] <- round(Bonferroni$p.Chisq[3], 5)
+colnames(TTable2)[4] <- "合计"
+colnames(TTable2)[5] <- "卡方值"
+colnames(TTable2)[7] <- "p值"
+colnames(TTable2)[6] <- "分组"
+TTable2 %>%
+  gt(
+    rowname_col = "疗法",
+    groupname_col = "分组",
+    id = "chi-square-Bonferroni2"
+  ) %>%
+  opt_css(css = make_css("chi-square-Bonferroni2")) %>%
+  fmt_number(
+    columns = 5:6,
+    decimals = 3
+  ) %>%
+  summary_rows(
+    groups = T,
+    columns = 2:4,
+    fns = list(
+      "合计" = ~ sum(.)
+    ),
+    formatter = fmt_number,
+    decimals = 0,
+    use_seps = FALSE
+  ) # %>%
+# tab_options(
+# row_group.background.color = "gray",
+# summary_row.background.color = "green"
+# )
+```
+
+## 各实验组与同一个对照组的比较
+
+用四格表卡方检验，检验水准$$\alpha' = \frac{\alpha}{2(k-1)}\quad k = 样本率个数$$
+<br>
+*例7-10*：用7-6的数据分析3种疗法的效率比较。<br>
+codes:
+```{r chi-square-multiple}
+df <- read_xls("..\\医学统计学第五版\\07章\\09 R数据文件\\E07_06.xls")
+TTable <- df %>% pivot_wider(names_from = result, values_from = n)
+TTable[1] <- c("物理疗法", "化学疗法", "外用膏药")
+colnames(TTable) <- c("疗法", "有效", "无效")
+TTable %>%
+  gt(id = "chi-square-Bonferroni") %>%
+  opt_css(css = make_css("chi-square-Bonferroni")) # gt表格制作
+Table <- as.table(as.matrix(TTable[-1])) # tibble转换为table
+rownames(Table) <- c("物理疗法", "化学疗法", "外用膏药")
+colnames(Table) <- c("有效", "无效")
+
+alpha <- 0.05 / 2 / (3 - 1)
+
+TTTable <- TTable[-3, ]
+TTTable[4] <- my2x2_chisq.test(Table[-3, ])$statistic
+TTTable[5] <- judge_pvalue(round(my2x2_chisq.test(Table[-3, ])$p.value, 4), alpha)
+colnames(TTTable)[4:5] <- c("statistic", "P-value")
+sjPlot::tab_df(TTTable, encoding = "GBK", CSS = make_css("sjPlot"))
+
+TTTable <- TTable[-1, ]
+TTTable[4] <- my2x2_chisq.test(Table[-1, ])$statistic
+TTTable[5] <- judge_pvalue(round(my2x2_chisq.test(Table[-1, ])$p.value, 4), alpha)
+colnames(TTTable)[4:5] <- c("statistic", "P-value")
+sjPlot::tab_df(TTTable, encoding = "GBK", CSS = make_css("sjPlot"))
+```
+
+# 秩转换的非参数检验
+
+适用范围：推断一个总体分布位置的中位数M和已知M'、两个或多个总体是否有差别。
+
+* 适用范围
+  + 不满足正态分布或方差齐性的资料
+  + 小样本资料
+  + 一端或两端是不确定数值的资料
+
+PS：若资料已满足参数检测，再使用非参数检验会使效能降低
+
+## Wilconxon秩和检验（符号秩和检验）
+
+* 适用范围
+  + 配对样本差值的中位数和0比较
+  + 单个样本中位数和总体比较
+<br>
+*例8-1*：用8-1的数据分析配对样本差值的中位数和0是否有差别。<br>
+codes:
+```{r Wilcoxon-dv0}
+df <- read_xls("..\\医学统计学第五版\\08章\\09 R数据文件\\E08_01.xls")
+df[4] <- 1:nrow(df)
+df <- df %>% arrange(d)
+df[5] <- 1:nrow(df)
+df <- bind_cols(df[4], df[1:3], df[5]) %>% arrange(...1)
+for (i in 1:nrow(df)) {
+  if (df[i, 4] < 0) {
+    df[i, 6] <- df[i, 5]
+    df[i, 5] <- NA
+  } else {
+    df[i, 6] <- NA
+  }
+}
+df[6] <- as.integer(df[[6]])
+colnames(df) <- c("编号", "正常饲料组", "维生素E缺乏饲料组", "差值", "正秩次", "负秩次")
+df %>%
+  gt(rowname_col = "编号", id = "Wilconxon-dv0") %>%
+  opt_css(css = make_css("Wilcoxon-dv0")) %>%
+  summary_rows(
+    columns = 5:6,
+    fns = list(
+      "合计" = ~ sum(., na.rm = T)
+    ),
+    formatter = fmt_number,
+    decimals = 0
+  )
+
+shapiro.test(df$差值) # 正态性检验不服从正态分布，故用秩和检验
+wilcox.test(df$正常饲料组, df$维生素E缺乏饲料组, paired = T) # 符号秩和检验
+```
+<br>
+*例8-2*：用8-1的数据分析样本和总体是否有差别。<br>
+codes:
+```{r Wilcoxon-nva}
+df <- read_xls("..\\医学统计学第五版\\08章\\09 R数据文件\\E08_02.xls")
+df[3] <- 1:nrow(df) # 编号
+df <- df %>% arrange(D) # 差值排序
+
+row_of_0 <- 0 # 差值为0 的行数变量
+for (i in 1:nrow(df)) {
+  if (df[i, 2] == 0) {
+    df_2 <- df[-i, ]
+    row_of_0 <- row_of_0 + 1
+  }
+} # 删除差值为0的行并记录行数
+
+df <- bind_cols(df[3], df[1:2]) # 置换列
+df_2 <- bind_cols(df_2[3], df_2[1:2]) # 置换列
+df_2[4] <- 1:nrow(df_2) # 差值非0秩排序步骤1
+df_2[4] <- as.double(df_2[[4]]) # 转换数据类型
+
+for (i in 1:(nrow(df_2) - 1)) {
+  some_n <- 1
+  s_um <- 0
+  q_ue <- 0
+  for (j in (i + 1):nrow(df_2)) {
+    if (abs(df_2[i, 3]) == df_2[j, 3]) {
+      some_n <- some_n + 1
+    }
+  }
+  if (some_n > 1) {
+    s_um <- sum(df_2[i:(i + some_n - 1), 4])
+    q_ue <- s_um / some_n
+    df_2[i:(i + some_n - 1), 4] <- q_ue
+  }
+} # 绝对值秩相同取平均值
+df_2[5] <- 0
+for (i in 1:nrow(df_2)) {
+  if (df_2[i, 3] < 0) {
+    df_2[i, 5] <- df_2[i, 4]
+    df_2[i, 4] <- NA
+  } else {
+    df_2[i, 5] <- NA
+  }
+} # 正、负秩分类
+df <- bind_rows(df_2[which(df_2[3] < 0), ], df[which(df[3] == 0), ], df_2[which(df_2[3] > 0), ])
+# 合并差值为0的行
+colnames(df) <- c("编号", "尿氟含量", "差值", "正秩次", "负秩次")
+df %>%
+  gt(rowname_col = "编号", id = "Wilcoxon-nva") %>%
+  opt_css(css = make_css("Wilcoxon-nva")) %>%
+  summary_rows(
+    columns = 4:5,
+    fns = list(
+      "合计" = ~ sum(., na.rm = T)
+    ),
+    formatter = fmt_number
+  )
+
+shapiro.test(df$差值) # 正态性检验不服从正态分布，故用秩和检验
+wilcox.test(df$尿氟含量, mu = 45.3, alternative = "greater") # 符号秩和检验
+```
+## 两个独立样本的Wilcoxon秩和检验
+
+适用范围：推断计量或等级资料的两个独立样本总体分布是否有差别。
+<br>
+*例8-3*：用8-3的数据分析肺癌患者RD是否高于硅沉着病患者RD。<br>
+codes:
+```{r Wilcoxon-nvn}
+df <- read_xls("..\\医学统计学第五版\\08章\\09 R数据文件\\E08_03.xls")
+df <- df %>% arrange(RD)
+df[3] <- 1:nrow(df)
+df[3] <- as.double(df[[3]])
+df_2 <- df
+df_2 <- geteqranks(df_2)
+
+df_2 <- df_2 %>% pivot_wider(names_from = group, values_from = RD)
+colnames(df_2) <- c("秩", "RD", "RD")
+df_21 <- df_2 %>%
+  select(1:2) %>%
+  filter(!is.na(RD))
+df_21[11:12, ] <- NA
+df_22 <- df_2 %>%
+  select(1, 3) %>%
+  filter(!is.na(RD))
+df_2 <- bind_cols(df_21, df_22)
+df_2[5] <- 1:nrow(df_2)
+colnames(df_2) <- c("RD值(cm) ", "秩 ", "RD值(cm)", "秩", "编号")
+df_2 <- bind_cols(df_2[5], df_2[2], df_2[1], df_2[4], df_2[3])
+df_2 %>%
+  gt(rowname_col = "编号", id = "Wilcoxon-nvn") %>%
+  tab_spanner(label = "肺癌患者", 2:3) %>%
+  tab_spanner(label = "硅肺沉着0期患者", 4:5) %>%
+  opt_css(css = make_css("Wilcoxon-nvn")) %>%
+  summary_rows(
+    columns = c(3, 5),
+    fns = list(
+      "合计" = ~ sum(., na.rm = T)
+    ),
+    formatter = fmt_number
+  )
+
+
+df$group <- as.factor(df$group)
+car::leveneTest(data = df, RD ~ group) # 不符合方差齐性
+wilcox.test(data = df, RD ~ group, alternative = "greater") # 检验结果
+```
+
+<br>
+*例8-4*：用8-4的数据比较用中草药治疗两种不同肺炎的疗效。<br>
+codes:
+```{r Wilcoxon-nvn2}
+df <- read_xls("..\\医学统计学第五版\\08章\\09 R数据文件\\E08_04.xls")
+df <- df %>% pivot_wider(names_from = group, values_from = freq)
+colnames(df) <- c("疗效", "病毒性肺炎", "细菌性肺炎")
+df %>%
+  gt(id = "Wilcoxon-nvn2") %>%
+  tab_spanner(label = "肺炎类型", 2:3) %>%
+  opt_css(css = make_css("Wilcoxon-nvn2"))
+
+onewayresult_RXC(df, 2)
+```
+
+## 完全随机设计多个样本比较的K-W H检验
+适用范围：推断计量或等级资料的多个独立样本总体分布是否有差别。
+<br>
+*例8-5*：用8-5的数据分析三种药物消灭钉螺的效果是否有差别。<br>
+codes:
+```{r Kruskal-Wallis-H}
+df <- read_xls("..\\医学统计学第五版\\08章\\09 R数据文件\\E08_05.xls")
+df_gt <- df %>% arrange(x)
+df_gt[3] <- 1:nrow(df)
+df_gt <- df_gt %>% pivot_wider(names_from = group, values_from = x)
+df_gt_1 <- df_gt %>%
+  select(c(2, 1)) %>%
+  filter(!is.na(.[1]))
+df_gt_2 <- df_gt %>%
+  select(c(3, 1)) %>%
+  filter(!is.na(.[1]))
+df_gt_3 <- df_gt %>%
+  select(c(4, 1)) %>%
+  filter(!is.na(.[1]))
+df_gt <- bind_cols(df_gt_3, df_gt_2, df_gt_1)
+colnames(df_gt) <- c("死亡率/%", "秩", "死亡率/% ", "秩 ", "死亡率/%  ", "秩  ")
+
+df_gt %>%
+  gt(id = "Kruskal-Wallis-H") %>%
+  tab_spanner(label = "甲药", 1:2) %>%
+  tab_spanner(label = "乙药", 3:4) %>%
+  tab_spanner(label = "丙药", 5:6) %>%
+  opt_css(css = make_css("Kruskal-Wallis-H")) %>%
+  summary_rows(
+    columns = c(2, 4, 6),
+    fns = list(
+      "秩和" = ~ sum(., na.rm = T)
+    ),
+    formatter = fmt_number,
+    decimals = 0
+  )
+
+kruskal.test(data = df, x ~ group)
+# 多重检验使用Nemenyi test，R语言较难实现
+```
+<br>
+*例8-6*：用8-6的数据分析三不同菌型小白鼠生存天数是否有差别。<br>
+codes:
+```{r Kruskal-Wallis-H2}
+df <- read_xls("..\\医学统计学第五版\\08章\\09 R数据文件\\E08_06.xls")
+df_gt <- df %>% arrange(surv)
+df_gt[3] <- 1:nrow(df)
+df_gt <- geteqranks(df_gt)
+
+df_gt_1 <- df_gt %>% filter(group == 1)
+df_gt_1 <- creatNarow(df_gt_1, 11)
+df_gt_2 <- df_gt %>% filter(group == 2)
+df_gt_2 <- creatNarow(df_gt_2, 11)
+df_gt_3 <- df_gt %>% filter(group == 3)
+
+df_gt <- bind_cols(df_gt_1[2:3], df_gt_2[2:3], df_gt_3[2:3])
+colnames(df_gt) <- c("存活天数", "秩", "存活天数 ", "秩 ", "存活天数  ", "秩  ")
+
+df_gt %>%
+  gt(id = "Kruskal-Wallis-H2") %>%
+  tab_spanner(label = "9D", 1:2) %>%
+  tab_spanner(label = "11C", 3:4) %>%
+  tab_spanner(label = "DSC1", 5:6) %>%
+  opt_css(css = make_css("Kruskal-Wallis-H2")) %>%
+  summary_rows(
+    columns = c(2, 4, 6),
+    fns = list(
+      "秩和" = ~ sum(., na.rm = T)
+    ),
+    formatter = fmt_number,
+    decimals = 0
+  )
+
+kruskal.test(data = df, surv ~ group)
+```
+
+<br>
+*例8-7*：用8-7的数据分析三种方案治疗急性黄疸型病毒肝炎是否有差别。<br>
+codes:
+```{r Kruskal-Wallis-H-RXC}
+df <- read_xls("..\\医学统计学第五版\\08章\\09 R数据文件\\E08_07.xls")
+df_gt <- df %>% pivot_wider(names_from = group, values_from = freq)
+colnames(df_gt)[2:4] <- c("西药组", "中药组", "中西医结合组")
+df_gt[[1]] <- c("无效", "好转", "显效", "痊愈")
+df_gt %>%
+  gt(id = "Kruskal-Wallis-H-RXC") %>%
+  opt_css(css = make_css("Kruskal-Wallis-H-RXC"))
+onewayresult_RXC(df_gt, 3)
+```
+
+## 随机区组设计多个样本比较的Friedman M检验
+适用范围：推断随机区组设计的多个相关样本所来自多个总体分布是否有差别。
+<br>
+*例8-9*：用8-5的数据分析三种药物消灭钉螺的效果是否有差别。<br>
+codes:
+```{r Friedman-M}
+df <- read_xls("..\\医学统计学第五版\\08章\\09 R数据文件\\E08_09.xls")
+
+df.test <- as.matrix(df)
+tdf <- t(df.test)
+df_2 <- df
+for (i in 1:ncol(tdf)) {
+  newlist <- tibble(tdf[, i])
+  newlist[2] <- 1:nrow(newlist)
+  newlist <- newlist %>% arrange(.[1])
+  arr_num <- newlist[[2]]
+  for (j in 1:4) {
+    df_2[i, arr_num[[j]]] <- j
+  }
+}
+df_2[5] <- 1:nrow(df_2)
+names(df) <- c("A", "B", "C", "D")
+names(df_2) <- c("a", "b", "c", "d", "e")
+df_3 <- bind_cols(df_2$e, df$A, df_2$a, df$B, df_2$b, df$C, df_2$c, df$D, df_2$d)
+names(df_3) <- c("编号", "反应率%", "秩", "反应率% ", "秩 ", "反应率%  ", "秩  ", "反应率%   ", "秩   ")
+
+df_3 %>%
+  gt(rowname_col = "编号", id = "Friedman-M") %>%
+  opt_css(css = make_css("Friedman-M")) %>%
+  tab_spanner(label = "频率A", 2:3) %>%
+  tab_spanner(label = "频率B", 4:5) %>%
+  tab_spanner(label = "频率C", 6:7) %>%
+  tab_spanner(label = "频率D", 8:9) %>%
+  summary_rows(
+    columns = c(3, 5, 7, 9),
+    fns = list(
+      "秩和" = ~ sum(., na.rm = T)
+    ),
+    formatter = fmt_number,
+    decimals = 1
+  )
+friedman.test(df.test)
+# 多重检验使用q test，R语言较难实现
+```
+
+```{r}
+mtcars
+tbl <- gt(mtcars)
+tbl <- tbl %>%
+  tab_header(
+    title = "This is a three-line table",
+    subtitle = "Made with gt package"
+  )
+tbl
+Three_line_tbl(tbl)
+```
+
